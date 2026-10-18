@@ -26,7 +26,7 @@ export default {
       if (!secret) return json({ error: "Missing secret query parameter." }, 400);
 
       try {
-        const cleanSecret = secret.replace(/\\s+/g, "").toUpperCase();
+        const cleanSecret = secret.replace(/\s+/g, "").toUpperCase();
         const otp = await generateTOTP(cleanSecret);
         return json({ otp }, 200, {
           "Cache-Control": "no-store, no-cache, must-revalidate",
