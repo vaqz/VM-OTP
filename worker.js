@@ -2,8 +2,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Serve the OTP API from this same Worker.
-    if (url.pathname === "/api/totp") {
+    // Support both the frontend API route and the legacy root JSON endpoint.
+    // /?secret=... returns JSON; / without a secret serves the frontend.
+    if (url.pathname === "/api/totp" || (url.pathname === "/" && url.searchParams.has("secret"))) {
       if (request.method === "OPTIONS") {
         return new Response(null, {
           status: 204,
