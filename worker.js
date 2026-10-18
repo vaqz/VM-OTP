@@ -1,77 +1,69 @@
-const ALLOWED_ORIGIN = "https://vmtotp.vaqzmobiz.com";
-
 export default {
-  async fetch(request) {
-    const origin = request.headers.get("Origin");
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Max-Age": "86400",
-      "Vary": "Origin"
-    };
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: origin === ALLOWED_ORIGIN ? corsHeaders : { "Vary": "Origin" }
-      });
-    }
-
-    if (origin && origin !== ALLOWED_ORIGIN) {
-      return json({ error: "Origin not allowed." }, 403, { "Vary": "Origin" });
-    }
-
-    if (request.method !== "GET") {
-      return json({ error: "Method not allowed." }, 405, corsHeaders);
-    }
-
+  async fetch(request, env) {
     const url = new URL(request.url);
-    const secret = url.searchParams.get("secret");
 
-    if (!secret) {
-      return json({ error: "Missing secret query parameter." }, 400, corsHeaders);
+    // Serve the OTP API from this same Worker.
+    if (url.pathname === "/api/totp") {
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "Access-Control-Allow-Origin": url.origin,
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+            "Vary": "Origin"
+          }
+        });
+      }
+
+      if (request.method !== "GET") {
+        return json({ error: "Method not allowed." }, 405, { Allow: "GET, OPTIONS" });
+      }
+
+      const secret = url.searchParams.get("secret");
+      if (!secret) return json({ error: "Missing secret query parameter." }, 400);
+
+      try {
+        const cleanSecret = secret.replace(/\\s+/g, "").toUpperCase();
+        const otp = await generateTOTP(cleanSecret);
+        return json({ otp }, 200, {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "Pragma": "no-cache"
+        });
+      } catch {
+        return json({ error: "Invalid Base32 secret key provided." }, 400);
+      }
     }
 
-    try {
-      const cleanSecret = secret.replace(/\\s+/g, "").toUpperCase();
-      const token = await generateTOTP(cleanSecret);
-      return json({ otp: token }, 200, {
-        ...corsHeaders,
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-        "Pragma": "no-cache"
-      });
-    } catch {
-      return json({ error: "Invalid Base32 secret key provided." }, 400, corsHeaders);
-    }
+    // All non-API paths (including /) are served from the bundled static frontend.
+    return env.ASSETS.fetch(request);
   }
 };
 
-function json(data, status, headers = {}) {
+function json(data, status, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...headers }
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      ...extraHeaders
+    }
   });
 }
 
-// Native Base32 and TOTP implementation (SHA-1, 6 digits, 30-second period).
+// Native Base32 and TOTP implementation (SHA-1, six digits, 30-second period).
 function base32ToBytes(base32) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   const cleaned = base32.replace(/=+$/, "").toUpperCase();
   if (!cleaned || !/^[A-Z2-7]+$/.test(cleaned)) {
     throw new Error("Invalid Base32 secret");
   }
-
   let bits = "";
-  for (const char of cleaned) {
-    bits += alphabet.indexOf(char).toString(2).padStart(5, "0");
-  }
-
+  for (const char of cleaned) bits += alphabet.indexOf(char).toString(2).padStart(5, "0");
   const bytes = [];
-  for (let i = 0; i + 8 <= bits.length; i += 8) {
-    bytes.push(parseInt(bits.slice(i, i + 8), 2));
-  }
-  if (bytes.length === 0) throw new Error("Secret is too short");
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  if (!bytes.length) throw new Error("Secret is too short");
   return new Uint8Array(bytes);
 }
 
